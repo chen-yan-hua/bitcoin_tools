@@ -1,0 +1,176 @@
+typedef CHAR CHAR32[32] <read=ReadCHAR32>;
+
+typedef CHAR CHAR32Reverse[32] <read=ReadCHAR32Reverse>;
+
+typedef struct {
+// Value           Storage length    Format
+// <  0xFD         1                 uint8_t
+// <= 0xFFFF       3                 0xFD followed by the length as uint16_t
+// <= 0xFFFF FFFF  5                 0xFE followed by the length as uint32_t
+// -               9                 0xFF followed by the length as uint64_t
+
+    unsigned char len_flag;
+
+    if (len_flag == 0xfd)
+      UINT16 len;
+    else if (len_flag == 0xfe)
+      UINT32 len;
+    else if(len_flag == 0xff)
+      UINT64 len;
+} VarInt;
+
+typedef struct {
+    DWORD           Version <name="Version">;
+    CHAR32Reverse   hashPrevBlock <name="hashPrevBlock">;
+    CHAR32Reverse   hashMerkleRoot <name="hashMerkleRoot">;
+    time_t          Time <format=hex, name="Time">;
+    DWORD           Bits <format=hex, name="Current target">;
+    DWORD           Nonce <name="Nonce", format=hex>;
+} BLOCK_HEADER;
+
+// 交易输入
+// 大小（字节）     字段            说明
+// 32               交易ID          上一个交易哈希值，该交易中未被花费的UTXO，作为输入的资金来源，如果是coinbase，则为0
+// 4                交易输出索引    未被花费的UTXO的索引号，从0开始计数，对于第一个交易(coinbase)其值总是 0xFFFFFFFF
+// 1–9(可变整数)    解锁脚本大小    解锁脚本长度，拥有正确的脚本内容（一般为私钥签名）才能使用资金来源
+// 变长             解锁脚本内容    对于 coinbase 交易，其值忽略
+// 4                序列号          通常为 0xFFFFFFFF
+typedef struct {
+    CHAR32  UTXO_Hash <name="Previous Transaction Hash">;
+    DWORD   Idx_of_UTXO <name="Previous TxOut Index", format=hex>;
+    VarInt  TxIn_Script_Len <name="Transaction Input Script length", read=ReadVarInt>;
+
+    local int script_len = 0;
+    if (TxIn_Script_Len.len_flag < 0xfd)
+      script_len = TxIn_Script_Len.len_flag;
+    else
+      script_len = TxIn_Script_Len.len;
+
+    CHAR    TxIn_Script[script_len] <name="Transaction Input Script", optimize=false>;
+    DWORD   sequence_no <name="Sequence No", format=hex>;
+} Transaction_Input;
+
+// 交易输出
+// 大小（字节）     字段            说明
+// 8                金额            比特币值（以10^-8特币为单位计）
+// 1–9（可变整数）  锁定脚本大小    只有满足锁定脚本中的要求，才能使用这笔钱
+// 变长             锁定脚本内容
+typedef struct {
+    QWORD   value <name="Bitcoin Value(Satoshi)">;
+    VarInt  TxOut_Script_Len <name="Transaction Output Script length", read=ReadVarInt>;
+
+    local int script_len = 0;
+    if (TxOut_Script_Len.len_flag < 0xfd)
+      script_len = TxOut_Script_Len.len_flag;
+    else
+      script_len = TxOut_Script_Len.len;
+
+    CHAR    TxOut_Script[script_len] <name="Transaction Output Script", optimize=false>;
+} Transaction_Output;
+
+// 交易结构
+// 大小（字节）     字段            说明
+// 4                版本            明确这笔交易参照的规则
+// 1-9              交易输入数量    被包含的输入的数量
+// 变长             输入            一个或多个交易输入
+// 1-9              交易输出数量    被包含的输出的数量
+// 变长             输出            一个或多个交易输出
+// 4                时钟时间        UNIX时间戳或区块号
+typedef struct {
+    DWORD   ver <name="Transaction Version">;
+
+    VarInt  txin_number <name="# Transaction Input", read=ReadVarInt>;
+    local int in_len = 0;
+    if (txin_number.len_flag < 0xfd)
+      in_len = txin_number.len_flag;
+    else
+      in_len = txin_number.len;
+    Transaction_Input txin[in_len] <name="Transaction Input", optimize=false>;
+
+    VarInt  txout_number <name="# Transaction Output", read=ReadVarInt>;
+    local int out_len = 0;
+    if (txout_number.len_flag < 0xfd)
+      out_len = txout_number.len_flag;
+    else
+      out_len = txout_number.len;
+    Transaction_Output txout[out_len] <name="Transaction Output", optimize=false>;
+
+    time_t    lock_time <format=hex, name="Lock Time">;
+} Transaction;
+
+typedef struct (int idx){
+    DWORD   magic <name="Magic Number", format=hex, comment="Must be 0xD9B4BEF9">;
+    DWORD   Blocksize <name="Blocksize">;
+    BLOCK_HEADER    Blockheader <name="Block_Header">;
+    VarInt    TxCounter <name="Transaction counter", read=ReadVarInt>;
+
+    local int tx_no = 0;
+    if (TxCounter.len_flag < 0xfd)
+      tx_no = TxCounter.len_flag;
+    else
+      tx_no = TxCounter.len;
+    Transaction tx[tx_no] <name="Transactions", optimize=false>;
+
+} BLOCK;
+
+string ReadVarInt( VarInt & v )
+{
+  string s;
+  if (v.len_flag == 0xfd)
+    SPrintf( s, "%d", v.len);
+  else if (v.len_flag == 0xfe)
+    SPrintf( s, "%d", v.len);
+  else if (v.len_flag == 0xff)
+    SPrintf( s, "%d", v.len);
+  else
+    SPrintf( s, "%d", v.len_flag);
+  return s;
+}
+
+string ReadCHAR32( CHAR32 v )
+{
+  string s;
+  SPrintf( s, "%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
+    (unsigned char)v[0],  (unsigned char)v[1],  (unsigned char)v[2],  (unsigned char)v[3],
+    (unsigned char)v[4],  (unsigned char)v[5],  (unsigned char)v[6],  (unsigned char)v[7],
+    (unsigned char)v[8],  (unsigned char)v[9],  (unsigned char)v[10], (unsigned char)v[11],
+    (unsigned char)v[12], (unsigned char)v[13], (unsigned char)v[14], (unsigned char)v[15],
+    (unsigned char)v[16], (unsigned char)v[17], (unsigned char)v[18], (unsigned char)v[19],
+    (unsigned char)v[20], (unsigned char)v[21], (unsigned char)v[22], (unsigned char)v[23],
+    (unsigned char)v[24], (unsigned char)v[25], (unsigned char)v[26], (unsigned char)v[27],
+    (unsigned char)v[28], (unsigned char)v[29], (unsigned char)v[30], (unsigned char)v[31]
+  );
+  return s;
+}
+
+string ReadCHAR32Reverse( CHAR32 v )
+{
+  string s;
+  SPrintf( s, "%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
+    (unsigned char)v[31], (unsigned char)v[30], (unsigned char)v[29], (unsigned char)v[28],
+    (unsigned char)v[27], (unsigned char)v[26], (unsigned char)v[25], (unsigned char)v[24],
+    (unsigned char)v[23], (unsigned char)v[22], (unsigned char)v[21], (unsigned char)v[20],
+    (unsigned char)v[19], (unsigned char)v[18], (unsigned char)v[17], (unsigned char)v[16],
+    (unsigned char)v[15], (unsigned char)v[14], (unsigned char)v[13], (unsigned char)v[12],
+    (unsigned char)v[11], (unsigned char)v[10], (unsigned char)v[9],  (unsigned char)v[8],
+    (unsigned char)v[7],  (unsigned char)v[6],  (unsigned char)v[5],  (unsigned char)v[4],
+    (unsigned char)v[3],  (unsigned char)v[2],  (unsigned char)v[1],  (unsigned char)v[0]
+  );
+  return s;
+}
+
+string ShowHexDump(unsigned CHAR hex)
+{
+    string s;
+    SPrintf( s, "/%02X/", hex);
+    return s;
+}
+
+LittleEndian();
+SetBackColor( cLtGray );
+
+local int i = 0;
+while(1)
+{
+  BLOCK theBlock(i) <name="BlockChain">;
+}
